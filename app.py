@@ -47,7 +47,6 @@ def read_any(file_name: str, raw_bytes: bytes) -> pd.DataFrame:
             sep = ";"
         return pd.read_csv(io.BytesIO(raw_bytes), sep=sep, engine="python")
     elif name.endswith((".xls", ".xlsx")):
-        # tenta todas as abas e retorna a 1ª com dados
         x = pd.ExcelFile(io.BytesIO(raw_bytes))
         for sh in x.sheet_names:
             df_try = pd.read_excel(io.BytesIO(raw_bytes), sheet_name=sh)
@@ -68,7 +67,6 @@ def pick_column(df: pd.DataFrame, alias_list) -> Optional[str]:
             return low[a.lower()]
         if norm(a) in normed:
             return normed[norm(a)]
-    # contém parte do nome
     for a in alias_list:
         for col in df.columns:
             if norm(a) in norm(col) or a.lower() in col.lower():
@@ -145,14 +143,12 @@ if uploaded is None:
     st.info("👆 Envie um arquivo para começar.")
     st.stop()
 
-# Lê dados
 try:
     df = read_any(uploaded.name, uploaded.getvalue())
 except Exception as e:
     st.error(f"Erro ao ler arquivo: {e}")
     st.stop()
 
-# Limpeza básica
 df.columns = [c.strip() for c in df.columns]
 
 col_agente = pick_column(df, aliases["agente_email"]) or "agente_email"
@@ -161,36 +157,29 @@ col_media = pick_column(df, aliases["media_por_dia"]) or "MÉDIA POR DIA"
 col_tma = pick_column(df, aliases["range_tma"]) or "Range tma"
 col_tcasa = pick_column(df, aliases["tempo_casa"]) or "Tempo de casa"
 
-# Controles manuais
 st.sidebar.subheader("🧭 Ajuste de Colunas Detectadas")
-col_agente = st.sidebar.selectbox("Coluna: Agente Email", options=df.columns, index=max(df.columns.get_loc(col_agente), 0) if col_agente in df.columns else 0)
-col_lider = st.sidebar.selectbox("Coluna: Líder", options=df.columns, index=max(df.columns.get_loc(col_lider), 0) if col_lider in df.columns else 0)
-col_media = st.sidebar.selectbox("Coluna: Média por Dia", options=df.columns, index=max(df.columns.get_loc(col_media), 0) if col_media in df.columns else 0)
-col_tma = st.sidebar.selectbox("Coluna: Range TMA", options=df.columns, index=max(df.columns.get_loc(col_tma), 0) if col_tma in df.columns else 0)
-col_tcasa = st.sidebar.selectbox("Coluna: Tempo de Casa", options=df.columns, index=max(df.columns.get_loc(col_tcasa), 0) if col_tcasa in df.columns else 0)
+col_agente = st.sidebar.selectbox("Coluna: Agente Email", options=df.columns, index=df.columns.get_loc(col_agente) if col_agente in df.columns else 0)
+col_lider = st.sidebar.selectbox("Coluna: Líder", options=df.columns, index=df.columns.get_loc(col_lider) if col_lider in df.columns else 0)
+col_media = st.sidebar.selectbox("Coluna: Média por Dia", options=df.columns, index=df.columns.get_loc(col_media) if col_media in df.columns else 0)
+col_tma = st.sidebar.selectbox("Coluna: Range TMA", options=df.columns, index=df.columns.get_loc(col_tma) if col_tma in df.columns else 0)
+col_tcasa = st.sidebar.selectbox("Coluna: Tempo de Casa", options=df.columns, index=df.columns.get_loc(col_tcasa) if col_tcasa in df.columns else 0)
 
 st.success(f"✔️ Colunas: Agente=**{col_agente}** | Líder=**{col_lider}** | Média/Dia=**{col_media}** | Range TMA=**{col_tma}** | Tempo de Casa=**{col_tcasa}**")
 
-# Padronizações
 for c in [col_agente, col_lider, col_tma, col_tcasa]:
     if c in df.columns:
         df[c] = df[c].astype(str).str.strip()
 
-# Ordena eixo X
 if col_tcasa in df.columns:
     df[col_tcasa] = pd.Categorical(df[col_tcasa], categories=ordem_tempo_casa, ordered=True)
 else:
     st.error("Coluna de 'tempo de casa' não encontrada.")
     st.stop()
 
-# Converte Média por Dia para número (se vier texto)
 df[col_media] = pd.to_numeric(df[col_media], errors="coerce")
-
-# TMA em minutos + HH:MM:SS
 df["TMA_min"] = df[col_tma].map(map_tma_min)
 df["TMA_hms"] = df["TMA_min"].apply(minutes_to_hhmmss)
 
-# Agregações
 agg_media = (
     df.groupby(col_tcasa, observed=True)
     .agg(media_atendimentos=(col_media, "mean"), qtd_agentes=(col_media, "count"))
@@ -207,7 +196,6 @@ agg_tma = (
 )
 agg_tma["tma_medio_hms"] = agg_tma["tma_medio_min"].apply(minutes_to_hhmmss)
 
-# Regressões
 lx1, ly1 = trend_xy(agg_media, col_tcasa, "media_atendimentos", ordem_tempo_casa)
 lx2, ly2 = trend_xy(agg_tma, col_tcasa, "tma_medio_min", ordem_tempo_casa)
 
@@ -224,36 +212,24 @@ with colA:
         x=col_tcasa,
         y="media_atendimentos",
         size="qtd_agentes",
-        hover_data={
-            col_tcasa: True,
-            "qtd_agentes": True,
-            "media_atendimentos": ":.2f",
-            "media_atendimentos_hms": True,
-        },
+        hover_data={col_tcasa: True, "qtd_agentes": True, "media_atendimentos": ":.2f", "media_atendimentos_hms": True},
         title="Média de Atendimentos por Dia × Tempo de Casa (Agregado)",
         category_orders={col_tcasa: ordem_tempo_casa},
     )
     if lx1.size > 0:
         x_start = ordem_tempo_casa[int(round(lx1[0]))]
         x_end = ordem_tempo_casa[int(round(lx1[-1]))]
-        fig1.add_trace(
-            go.Scatter(
-                x=[x_start, x_end],
-                y=ly1,
-                mode="lines",
-                name="Linha de Tendência",
-                line=dict(dash="dash"),
-            )
-        )
+        fig1.add_trace(go.Scatter(x=[x_start, x_end], y=ly1, mode="lines", name="Linha de Tendência", line=dict(dash="dash")))
     fig1.update_layout(
+        title_font_color="white",
+        font_color="white",
         plot_bgcolor="#2F2F2F",
         paper_bgcolor="#2F2F2F",
-        font_color="white",
-        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray"),
-        yaxis=dict(gridcolor="gray", title="Média de atendimentos por dia"),
+        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray", title_font=dict(color="white"), tickfont=dict(color="white")),
+        yaxis=dict(gridcolor="gray", title="Média de atendimentos por dia", title_font=dict(color="white"), tickfont=dict(color="white")),
         height=520,
     )
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, use_container_width=True, theme=None)
 
 with colB:
     fig2 = px.scatter(
@@ -268,24 +244,17 @@ with colB:
     if lx2.size > 0:
         x_start = ordem_tempo_casa[int(round(lx2[0]))]
         x_end = ordem_tempo_casa[int(round(lx2[-1]))]
-        fig2.add_trace(
-            go.Scatter(
-                x=[x_start, x_end],
-                y=ly2,
-                mode="lines",
-                name="Linha de Tendência",
-                line=dict(dash="dash"),
-            )
-        )
+        fig2.add_trace(go.Scatter(x=[x_start, x_end], y=ly2, mode="lines", name="Linha de Tendência", line=dict(dash="dash")))
     fig2.update_layout(
+        title_font_color="white",
+        font_color="white",
         plot_bgcolor="#2F2F2F",
         paper_bgcolor="#2F2F2F",
-        font_color="white",
-        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray"),
-        yaxis=dict(gridcolor="gray", title="TMA médio (minutos)"),
+        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray", title_font=dict(color="white"), tickfont=dict(color="white")),
+        yaxis=dict(gridcolor="gray", title="TMA médio (minutos)", title_font=dict(color="white"), tickfont=dict(color="white")),
         height=520,
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True, theme=None)
 
 st.header("👤 Visões por Agente")
 
@@ -304,14 +273,15 @@ with colC:
         category_orders={col_tcasa: ordem_tempo_casa},
     )
     fig3.update_layout(
+        title_font_color="white",
+        font_color="white",
         plot_bgcolor="#2F2F2F",
         paper_bgcolor="#2F2F2F",
-        font_color="white",
-        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray"),
-        yaxis=dict(gridcolor="gray", title="TMA do agente (minutos)"),
+        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray", title_font=dict(color="white"), tickfont=dict(color="white")),
+        yaxis=dict(gridcolor="gray", title="TMA do agente (minutos)", title_font=dict(color="white"), tickfont=dict(color="white")),
         height=520,
     )
-    st.plotly_chart(fig3, use_container_width=True)
+    st.plotly_chart(fig3, use_container_width=True, theme=None)
 
 with colD:
     fig4 = px.scatter(
@@ -323,14 +293,15 @@ with colD:
         category_orders={col_tcasa: ordem_tempo_casa},
     )
     fig4.update_layout(
+        title_font_color="white",
+        font_color="white",
         plot_bgcolor="#2F2F2F",
         paper_bgcolor="#2F2F2F",
-        font_color="white",
-        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray"),
-        yaxis=dict(gridcolor="gray", title="Média de atendimentos por dia"),
+        xaxis=dict(categoryorder="array", categoryarray=ordem_tempo_casa, gridcolor="gray", title_font=dict(color="white"), tickfont=dict(color="white")),
+        yaxis=dict(gridcolor="gray", title="Média de atendimentos por dia", title_font=dict(color="white"), tickfont=dict(color="white")),
         height=520,
     )
-    st.plotly_chart(fig4, use_container_width=True)
+    st.plotly_chart(fig4, use_container_width=True, theme=None)
 
 # Downloads
 st.markdown("---")
